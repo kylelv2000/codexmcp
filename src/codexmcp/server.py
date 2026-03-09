@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -24,6 +26,43 @@ if _default_log_level not in _VALID_LOG_LEVELS:
 
 # Keep MCP protocol stdio clean by default; allow override via env.
 mcp = FastMCP("Codex MCP Server-from guda.studio", log_level=_default_log_level)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+_DIAGNOSTICS_ENABLED = _env_flag("CODEXMCP_DIAGNOSTICS", default=False)
+
+
+def _diag(event: str, **fields: Any) -> None:
+    """Write structured diagnostics to stderr without polluting MCP stdout."""
+    if not _DIAGNOSTICS_ENABLED:
+        return
+    payload: Dict[str, Any] = {
+        "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "event": event,
+        **fields,
+    }
+    try:
+        sys.stderr.write(f"[codexmcp] {json.dumps(payload, ensure_ascii=False)}\n")
+        sys.stderr.flush()
+    except Exception:
+        # Never fail MCP protocol flow due to diagnostics emission.
+        pass
+
+
+def _flatten_exception_types(error: BaseException) -> list[str]:
+    """Flatten an ExceptionGroup into a list of leaf exception type names."""
+    if isinstance(error, BaseExceptionGroup):
+        result: list[str] = []
+        for sub_error in error.exceptions:
+            result.extend(_flatten_exception_types(sub_error))
+        return result
+    return [type(error).__name__]
 
 
 def _empty_str_to_none(value: str | None) -> str | None:
@@ -267,9 +306,19 @@ async def codex(
                 break
     except FileNotFoundError as error:
         success = False
+        _diag(
+            "codex.exec.spawn_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+        )
         err_message += "\n\n[codex cli not found] " + str(error)
     except OSError as error:
         success = False
+        _diag(
+            "codex.exec.spawn_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+        )
         err_message += "\n\n[os error] " + str(error)
 
     if thread_id is None:
@@ -299,9 +348,39 @@ async def codex(
 
 def run() -> None:
     """Start the MCP server over stdio transport."""
+    _diag("server.start", transport="stdio", pid=os.getpid(), fastmcp_log_level=_default_log_level)
     try:
-        mcp.run(transport="stdio")
-    except* (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream):
+        try:
+            mcp.run(transport="stdio")
+            _diag("server.stop", reason="clean_exit")
+        except Exception as error:
+            # Let ExceptionGroup be handled in except* blocks below.
+            if isinstance(error, BaseExceptionGroup):
+                raise
+            _diag(
+                "server.stop",
+                reason="unhandled_exception",
+                error_type=type(error).__name__,
+                message=str(error),
+            )
+            raise
+    except* (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream) as error_group:
+        exception_types = _flatten_exception_types(error_group)
+        _diag(
+            "server.stop",
+            reason="client_disconnected",
+            exception_count=len(exception_types),
+            exception_types=exception_types,
+        )
         # The MCP client can close stdio while shutdown tasks are still draining.
         # Treat this as a normal disconnect instead of crashing with traceback.
         pass
+    except* Exception as error_group:
+        exception_types = _flatten_exception_types(error_group)
+        _diag(
+            "server.stop",
+            reason="unhandled_exception_group",
+            exception_count=len(exception_types),
+            exception_types=exception_types,
+        )
+        raise
