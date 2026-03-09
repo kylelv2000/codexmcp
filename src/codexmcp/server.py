@@ -12,11 +12,18 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Any, Dict, Generator, List, Literal, Optional
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from pydantic import BeforeValidator, Field
 import shutil
 
-mcp = FastMCP("Codex MCP Server-from guda.studio")
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+_default_log_level = os.getenv("CODEXMCP_FASTMCP_LOG_LEVEL", "WARNING").upper()
+if _default_log_level not in _VALID_LOG_LEVELS:
+    _default_log_level = "WARNING"
+
+# Keep MCP protocol stdio clean by default; allow override via env.
+mcp = FastMCP("Codex MCP Server-from guda.studio", log_level=_default_log_level)
 
 
 def _empty_str_to_none(value: str | None) -> str | None:
@@ -196,7 +203,7 @@ async def codex(
     cmd = ["codex", "exec", "--sandbox", sandbox, "--cd", str(cd), "--json"]
     
     if len(image):
-        cmd.extend(["--image", ",".join(image)])
+        cmd.extend(["--image", ",".join(str(path) for path in image)])
         
     if model:
         cmd.extend(["--model", model])
@@ -225,38 +232,45 @@ async def codex(
     err_message = ""
     thread_id: Optional[str] = None
 
-    for line in run_shell_command(cmd):
-        try:
-            line_dict = json.loads(line.strip())
-            all_messages.append(line_dict)
-            item = line_dict.get("item", {})
-            item_type = item.get("type", "")
-            if item_type == "agent_message":
-                agent_messages = agent_messages + item.get("text", "")
-            if line_dict.get("thread_id") is not None:
-                thread_id = line_dict.get("thread_id")
-            if "fail" in line_dict.get("type", ""):
-                success = False if len(agent_messages) == 0 else success
-                err_message += "\n\n[codex error] " + line_dict.get("error", {}).get("message", "")
-            if "error" in line_dict.get("type", ""):
-                error_msg = line_dict.get("message", "")
-                import re
-                is_reconnecting = bool(re.match(r'^Reconnecting\.\.\.\s+\d+/\d+', error_msg))
-                
-                if not is_reconnecting:
+    try:
+        for line in run_shell_command(cmd):
+            try:
+                line_dict = json.loads(line.strip())
+                all_messages.append(line_dict)
+                item = line_dict.get("item", {})
+                item_type = item.get("type", "")
+                if item_type == "agent_message":
+                    agent_messages = agent_messages + item.get("text", "")
+                if line_dict.get("thread_id") is not None:
+                    thread_id = line_dict.get("thread_id")
+                if "fail" in line_dict.get("type", ""):
                     success = False if len(agent_messages) == 0 else success
-                    err_message += "\n\n[codex error] " + error_msg
+                    err_message += "\n\n[codex error] " + line_dict.get("error", {}).get("message", "")
+                if "error" in line_dict.get("type", ""):
+                    error_msg = line_dict.get("message", "")
+                    import re
+                    is_reconnecting = bool(re.match(r'^Reconnecting\.\.\.\s+\d+/\d+', error_msg))
                     
-        except json.JSONDecodeError:
-            # import sys
-            # print(f"Ignored non-JSON line: {line}", file=sys.stderr)
-            err_message += "\n\n[json decode error] " + line
-            continue
-            
-        except Exception as error:
-            err_message += "\n\n[unexpected error] " + f"Unexpected error: {error}. Line: {line!r}"
-            success = False
-            break
+                    if not is_reconnecting:
+                        success = False if len(agent_messages) == 0 else success
+                        err_message += "\n\n[codex error] " + error_msg
+                        
+            except json.JSONDecodeError:
+                # import sys
+                # print(f"Ignored non-JSON line: {line}", file=sys.stderr)
+                err_message += "\n\n[json decode error] " + line
+                continue
+                
+            except Exception as error:
+                err_message += "\n\n[unexpected error] " + f"Unexpected error: {error}. Line: {line!r}"
+                success = False
+                break
+    except FileNotFoundError as error:
+        success = False
+        err_message += "\n\n[codex cli not found] " + str(error)
+    except OSError as error:
+        success = False
+        err_message += "\n\n[os error] " + str(error)
 
     if thread_id is None:
         success = False
@@ -285,4 +299,9 @@ async def codex(
 
 def run() -> None:
     """Start the MCP server over stdio transport."""
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    except* (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream):
+        # The MCP client can close stdio while shutdown tasks are still draining.
+        # Treat this as a normal disconnect instead of crashing with traceback.
+        pass

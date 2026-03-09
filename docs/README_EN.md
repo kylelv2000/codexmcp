@@ -5,7 +5,7 @@
 
 **Seamlessly Bridge Claude Code and Codex**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/) [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)[![Share](https://img.shields.io/badge/share-000000?logo=x&logoColor=white)](https://x.com/intent/tweet?text=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex%20https://github.com/GuDaStudio/codexmcp%20%23AI%20%23Coding%20%23MCP) [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/GuDaStudio/codexmcp) [![Share](https://img.shields.io/badge/share-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/submit?title=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex&url=https://github.com/GuDaStudio/codexmcp) [![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/GuDaStudio/codexmcp&text=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/) [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)[![Share](https://img.shields.io/badge/share-000000?logo=x&logoColor=white)](https://x.com/intent/tweet?text=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex%20https://github.com/kylelv2000/codexmcp%20%23AI%20%23Coding%20%23MCP) [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/kylelv2000/codexmcp) [![Share](https://img.shields.io/badge/share-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/submit?title=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex&url=https://github.com/kylelv2000/codexmcp) [![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/kylelv2000/codexmcp&text=CodexMCP：Seamlessly%20bridge%20Claude%20Code%20and%20Codex)
 
 
 ⭐ Star us on GitHub — Your support means the world! 🙏😊
@@ -78,7 +78,7 @@ claude mcp remove codex
 **1.2** Install CodexMCP.
 
 ```bash
-claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp
+claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/kylelv2000/codexmcp.git codexmcp
 ```
 
 **1.3** Verify the installation. Run in your **terminal**:
@@ -89,10 +89,33 @@ claude mcp list
 
 > [!IMPORTANT]
 > If you see the following output, installation was successful!
->  `codex: uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp - ✓ Connected`
+>  `codex: uvx --from git+https://github.com/kylelv2000/codexmcp.git codexmcp - ✓ Connected`
 
 **1.4** Optionally allow Claude Code to automatically interact with Codex by adding `mcp__codex__codex` to the allow list in `~/.claude/settings.json`
 ![](../images/image.png)
+
+**1.5** Install CodexMCP in Cursor (stdio).
+
+Add the following to Cursor MCP config (global `~/.cursor/mcp.json` or workspace `.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "codex": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/kylelv2000/codexmcp.git",
+        "codexmcp"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+Restart Cursor, then verify `codex` shows as Connected in MCP Servers.
 
 ### 2. Configure Claude Code Prompts (Optional)
 
@@ -259,7 +282,7 @@ No. Each call uses an independent `SESSION_ID`, ensuring complete isolation.
 
 ```bash
 # Clone the repository
-git clone https://github.com/GuDaStudio/codexmcp.git
+git clone https://github.com/kylelv2000/codexmcp.git
 cd codexmcp
 
 # Install dependencies
@@ -287,6 +310,6 @@ Copyright (c) 2025 [guda.studio](mailto:gudaclaude@gmail.com)
 <div align="center">
 
 ## Support us with a 🌟~
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/codexmcp&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/codexmcp&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=kylelv2000/codexmcp&type=date&legend=top-left)](https://www.star-history.com/#kylelv2000/codexmcp&type=date&legend=top-left)
 
 </div>

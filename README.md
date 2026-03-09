@@ -5,7 +5,7 @@
 
 **让 Claude Code 与 Codex 无缝协作** 
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/) [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)[![Share](https://img.shields.io/badge/share-000000?logo=x&logoColor=white)](https://x.com/intent/tweet?text=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作%20https://github.com/GuDaStudio/codexmcp%20%23AI%20%23Coding%20%23MCP) [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/GuDaStudio/codexmcp) [![Share](https://img.shields.io/badge/share-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/submit?title=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作&url=https://github.com/GuDaStudio/codexmcp) [![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/GuDaStudio/codexmcp&text=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT) [![Python Version](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/) [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)[![Share](https://img.shields.io/badge/share-000000?logo=x&logoColor=white)](https://x.com/intent/tweet?text=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作%20https://github.com/kylelv2000/codexmcp%20%23AI%20%23Coding%20%23MCP) [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/kylelv2000/codexmcp) [![Share](https://img.shields.io/badge/share-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/submit?title=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作&url=https://github.com/kylelv2000/codexmcp) [![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/kylelv2000/codexmcp&text=CodexMCP：让%20Claude%20Code%20与%20Codex%20无缝协作)
 
 
 ⭐ 在GitHub上给我们点星~您的支持对我们意义重大！ 🙏😊
@@ -80,7 +80,7 @@ claude mcp remove codex
 **1.2** 安装 CodexMCP。
 
 ```bash
-claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp
+claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/kylelv2000/codexmcp.git codexmcp
 ```
 
 **1.3** 验证安装。在 **终端** 中运行：
@@ -91,10 +91,33 @@ claude mcp list
 
 > [!IMPORTANT]
 > 如果看到如下描述，说明安装成功！
->  `codex: uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp - ✓ Connected` 
+>  `codex: uvx --from git+https://github.com/kylelv2000/codexmcp.git codexmcp - ✓ Connected` 
 
 **1.4** 可选择默认允许claude code自动与codex交互，在`~/.claude/settings.json`添加 `mcp__codex__codex` allow项
 ![](images/image.png)
+
+**1.5** 在 Cursor 中安装 CodexMCP（stdio）。
+
+在 Cursor 的 MCP 配置文件（全局 `~/.cursor/mcp.json` 或工作区 `.cursor/mcp.json`）中添加：
+
+```json
+{
+  "mcpServers": {
+    "codex": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/kylelv2000/codexmcp.git",
+        "codexmcp"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+保存后重启 Cursor，进入 MCP Servers 页面确认 `codex` 状态为 Connected。
 
 ### 2. 配置claude code提示词（可选）
 
@@ -261,7 +284,7 @@ claude mcp list
 
 ```bash
 # 克隆仓库
-git clone https://github.com/GuDaStudio/codexmcp.git
+git clone https://github.com/kylelv2000/codexmcp.git
 cd codexmcp
 
 # 安装依赖
@@ -289,6 +312,6 @@ Copyright (c) 2025 [guda.studio](mailto:gudaclaude@gmail.com)
 <div align="center">
 
 ## 用 🌟 为本项目助力~
-[![Star History Chart](https://api.star-history.com/svg?repos=GuDaStudio/codexmcp&type=date&legend=top-left)](https://www.star-history.com/#GuDaStudio/codexmcp&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=kylelv2000/codexmcp&type=date&legend=top-left)](https://www.star-history.com/#kylelv2000/codexmcp&type=date&legend=top-left)
 
 </div>
