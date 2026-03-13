@@ -6,6 +6,8 @@ import datetime as dt
 import json
 import os
 import queue
+import re
+import signal
 import subprocess
 import sys
 import threading
@@ -84,21 +86,31 @@ def run_shell_command(cmd: list[str]) -> Generator[str, None, None]:
     # On Windows, codex is exposed via a *.cmd shim. Use cmd.exe with /s so
     # user prompts containing quotes/newlines aren't reinterpreted as shell syntax.
     popen_cmd = cmd.copy()
-    codex_path = shutil.which('codex') or cmd[0]
+    codex_path = shutil.which("codex") or cmd[0]
     popen_cmd[0] = codex_path
+
+    popen_kwargs: Dict[str, Any] = {
+        "shell": False,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "universal_newlines": True,
+        "encoding": "utf-8",
+    }
+    # Start a dedicated process group/session so cleanup can terminate descendants.
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
 
     process = subprocess.Popen(
         popen_cmd,
-        shell=False,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        encoding='utf-8',
+        **popen_kwargs,
     )
 
     output_queue: queue.Queue[str | None] = queue.Queue()
-    GRACEFUL_SHUTDOWN_DELAY = 0.3
+    graceful_shutdown_delay_seconds = 0.3
+    wait_timeout_seconds = 5.0
 
     def is_turn_completed(line: str) -> bool:
         """Check if the line indicates turn completion via JSON parsing."""
@@ -108,47 +120,97 @@ def run_shell_command(cmd: list[str]) -> Generator[str, None, None]:
         except (json.JSONDecodeError, AttributeError, TypeError):
             return False
 
+    def request_terminate(reason: str) -> None:
+        if process.poll() is not None:
+            return
+        _diag("codex.exec.terminate", reason=reason, pid=process.pid)
+        try:
+            if os.name == "nt":
+                process.terminate()
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            # Process may already be gone.
+            pass
+
+    def force_stop_process() -> None:
+        if process.poll() is not None:
+            return
+        request_terminate("cleanup")
+        try:
+            process.wait(timeout=wait_timeout_seconds)
+            return
+        except subprocess.TimeoutExpired:
+            _diag("codex.exec.kill", reason="cleanup_timeout", pid=process.pid)
+        try:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            return
+        try:
+            process.wait(timeout=wait_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _diag("codex.exec.kill_timeout", pid=process.pid)
+
     def read_output() -> None:
         """Read process output in a separate thread."""
-        if process.stdout:
+        try:
+            if process.stdout is None:
+                return
             for line in iter(process.stdout.readline, ""):
                 stripped = line.strip()
                 output_queue.put(stripped)
                 if is_turn_completed(stripped):
-                    time.sleep(GRACEFUL_SHUTDOWN_DELAY)
-                    process.terminate()
+                    time.sleep(graceful_shutdown_delay_seconds)
+                    request_terminate("turn_completed")
                     break
-            process.stdout.close()
-        output_queue.put(None)
+        finally:
+            if process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except OSError:
+                    pass
+            output_queue.put(None)
 
-    thread = threading.Thread(target=read_output)
+    thread = threading.Thread(target=read_output, daemon=True)
     thread.start()
 
-    # Yield lines while process is running
-    while True:
-        try:
-            line = output_queue.get(timeout=0.5)
+    closed_early = False
+    try:
+        # Yield lines while process is running.
+        while True:
+            try:
+                line = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                if process.poll() is not None and not thread.is_alive():
+                    break
+                continue
             if line is None:
                 break
             yield line
-        except queue.Empty:
-            if process.poll() is not None and not thread.is_alive():
-                break
+    except GeneratorExit:
+        closed_early = True
+        raise
+    finally:
+        # Always clean up process/thread even when caller aborts iteration.
+        force_stop_process()
+        thread.join(timeout=wait_timeout_seconds)
+        if thread.is_alive():
+            _diag("codex.exec.reader_thread_alive", pid=process.pid)
 
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-    thread.join(timeout=5)
+    if closed_early:
+        return
 
     while not output_queue.empty():
         try:
             line = output_queue.get_nowait()
-            if line is not None:
-                yield line
         except queue.Empty:
             break
+        if line is not None:
+            yield line
+
 
 def windows_escape(prompt):
     """
@@ -172,6 +234,111 @@ def windows_escape(prompt):
     result = result.replace("'", "\\'")
     
     return result
+
+
+def _execute_codex_command(
+    cmd: list[str], return_all_messages: bool
+) -> Dict[str, Any]:
+    """Execute codex command and parse JSONL output."""
+    started_at = time.monotonic()
+    _diag("codex.exec.start", args_count=len(cmd))
+    all_messages: list[Dict[str, Any]] = []
+    agent_messages = ""
+    success = True
+    err_message = ""
+    thread_id: Optional[str] = None
+
+    try:
+        for line in run_shell_command(cmd):
+            try:
+                line_dict = json.loads(line.strip())
+                all_messages.append(line_dict)
+                item = line_dict.get("item", {})
+                item_type = item.get("type", "")
+                if item_type == "agent_message":
+                    agent_messages = agent_messages + item.get("text", "")
+                if line_dict.get("thread_id") is not None:
+                    thread_id = line_dict.get("thread_id")
+                if "fail" in line_dict.get("type", ""):
+                    success = False if len(agent_messages) == 0 else success
+                    err_message += (
+                        "\n\n[codex error] "
+                        + line_dict.get("error", {}).get("message", "")
+                    )
+                if "error" in line_dict.get("type", ""):
+                    error_msg = line_dict.get("message", "")
+                    is_reconnecting = bool(
+                        re.match(r"^Reconnecting\.\.\.\s+\d+/\d+", error_msg)
+                    )
+
+                    if not is_reconnecting:
+                        success = False if len(agent_messages) == 0 else success
+                        err_message += "\n\n[codex error] " + error_msg
+
+            except json.JSONDecodeError:
+                err_message += "\n\n[json decode error] " + line
+                continue
+
+            except Exception as error:
+                err_message += (
+                    "\n\n[unexpected error] "
+                    + f"Unexpected error: {error}. Line: {line!r}"
+                )
+                success = False
+                break
+    except FileNotFoundError as error:
+        success = False
+        _diag(
+            "codex.exec.spawn_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+        err_message += "\n\n[codex cli not found] " + str(error)
+    except OSError as error:
+        success = False
+        _diag(
+            "codex.exec.spawn_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+        err_message += "\n\n[os error] " + str(error)
+
+    if thread_id is None:
+        success = False
+        err_message = "Failed to get `SESSION_ID` from the codex session. \n\n" + err_message
+
+    if len(agent_messages) == 0:
+        success = False
+        err_message = (
+            "Failed to get `agent_messages` from the codex session. \n\n "
+            "You can try to set `return_all_messages` to `True` to get the full "
+            "reasoning information. "
+            + err_message
+        )
+
+    if success:
+        result: Dict[str, Any] = {
+            "success": True,
+            "SESSION_ID": thread_id,
+            "agent_messages": agent_messages,
+        }
+    else:
+        result = {"success": False, "error": err_message}
+
+    if return_all_messages:
+        result["all_messages"] = all_messages
+
+    _diag(
+        "codex.exec.finish",
+        success=result.get("success", False),
+        duration_ms=int((time.monotonic() - started_at) * 1000),
+        has_session=thread_id is not None,
+        agent_chars=len(agent_messages),
+        error_chars=len(err_message),
+    )
+
+    return result
+
 
 @mcp.tool(
     name="codex",
@@ -264,86 +431,11 @@ async def codex(
     else:
         PROMPT = PROMPT
     cmd += ['--', PROMPT]
-
-    all_messages: list[Dict[str, Any]] = []
-    agent_messages = ""
-    success = True
-    err_message = ""
-    thread_id: Optional[str] = None
-
-    try:
-        for line in run_shell_command(cmd):
-            try:
-                line_dict = json.loads(line.strip())
-                all_messages.append(line_dict)
-                item = line_dict.get("item", {})
-                item_type = item.get("type", "")
-                if item_type == "agent_message":
-                    agent_messages = agent_messages + item.get("text", "")
-                if line_dict.get("thread_id") is not None:
-                    thread_id = line_dict.get("thread_id")
-                if "fail" in line_dict.get("type", ""):
-                    success = False if len(agent_messages) == 0 else success
-                    err_message += "\n\n[codex error] " + line_dict.get("error", {}).get("message", "")
-                if "error" in line_dict.get("type", ""):
-                    error_msg = line_dict.get("message", "")
-                    import re
-                    is_reconnecting = bool(re.match(r'^Reconnecting\.\.\.\s+\d+/\d+', error_msg))
-                    
-                    if not is_reconnecting:
-                        success = False if len(agent_messages) == 0 else success
-                        err_message += "\n\n[codex error] " + error_msg
-                        
-            except json.JSONDecodeError:
-                # import sys
-                # print(f"Ignored non-JSON line: {line}", file=sys.stderr)
-                err_message += "\n\n[json decode error] " + line
-                continue
-                
-            except Exception as error:
-                err_message += "\n\n[unexpected error] " + f"Unexpected error: {error}. Line: {line!r}"
-                success = False
-                break
-    except FileNotFoundError as error:
-        success = False
-        _diag(
-            "codex.exec.spawn_failed",
-            error_type=type(error).__name__,
-            message=str(error),
-        )
-        err_message += "\n\n[codex cli not found] " + str(error)
-    except OSError as error:
-        success = False
-        _diag(
-            "codex.exec.spawn_failed",
-            error_type=type(error).__name__,
-            message=str(error),
-        )
-        err_message += "\n\n[os error] " + str(error)
-
-    if thread_id is None:
-        success = False
-        err_message = "Failed to get `SESSION_ID` from the codex session. \n\n" + err_message
-        
-    if len(agent_messages) == 0:
-        success = False
-        err_message = "Failed to get `agent_messages` from the codex session. \n\n You can try to set `return_all_messages` to `True` to get the full reasoning information. " + err_message
-
-    if success:
-        result: Dict[str, Any] = {
-            "success": True,
-            "SESSION_ID": thread_id,
-            "agent_messages": agent_messages,
-            # "PROMPT": PROMPT,
-        }
-        
-    else:
-        result = {"success": False, "error": err_message}
-        
-    if return_all_messages:
-            result["all_messages"] = all_messages
-
-    return result
+    return await anyio.to_thread.run_sync(
+        _execute_codex_command,
+        cmd,
+        return_all_messages,
+    )
 
 
 def run() -> None:
